@@ -81,15 +81,14 @@ class UptimemonTests(unittest.TestCase):
         logging.root.setLevel(logging.INFO)
         handler = TestHandler()
         logging.root.addHandler(handler)
-        name = 'foo'
-        uptimemon = Uptimemon({name:600}, {}, Mock())
+        uptimemon = Uptimemon({'foo':600}, {}, Mock())
         uptimemon.restart = Mock()
         uptimemon.check_process_info({
-            'name':name,
+            'name':'foo',
             'group':'group',
             'now':1700,
-            'starttime':1000})
-        uptimemon.restart.assert_called_with(name)
+            'start':1000})
+        uptimemon.restart.assert_called_with('group:foo')
         assert handler.buffer[0]['msg'] == 'Process %s is running since %i seconds, longer than allowed %i'
 
     def test_runforever_tick_programs(self):

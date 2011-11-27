@@ -96,7 +96,7 @@ class Uptimemon:
     def check_process_info(self, info):
         name = info['name']
         group = info['group']
-        uptime = info['now'] - info['starttime']
+        uptime = info['now'] - info['start']
         full_name = '%s:%s' % (group, name)
 
         max_uptime = (self.uptime_per_program.get(name)
@@ -109,9 +109,9 @@ class Uptimemon:
         if uptime > max_uptime:
             logging.info('Process %s is running since %i seconds, longer than '
                     'allowed %i', name, uptime, max_uptime)
-            self.restart(name)
+            self.restart(full_name)
 
-    def restart(self, name, rss):
+    def restart(self, name):
         logging.info('Restarting %s', name)
 
         try:
@@ -168,7 +168,7 @@ def main():
             name, uptime = parse_option(option, value)
             uptime_per_group[name] = uptime
 
-    logging.basicSetup(
+    logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s %(levelname)s %(message)s')
     rpc = childutils.getRPCInterface(os.environ)
