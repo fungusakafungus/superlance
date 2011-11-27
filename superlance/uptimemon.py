@@ -1,6 +1,7 @@
 #!/usr/bin/env python -u
 ##############################################################################
 #
+# Copyright (c) 2011 Ilya Margolin
 # Copyright (c) 2007 Agendaless Consulting and Contributors.
 # All Rights Reserved.
 #
@@ -13,31 +14,30 @@
 #
 ##############################################################################
 
-# A event listener meant to be subscribed to TICK_60 (or TICK_5)
-# events, which restarts any processes that are children of
-# supervisord that consume "too much" memory.  Performs horrendous
-# screenscrapes of ps output.  Works on Linux and OS X (Tiger/Leopard)
-# as far as I know.
-
-# A supervisor config snippet that tells supervisor to use this script
-# as a listener is below.
-#
-# [eventlistener:uptimemon]
-# command=python uptimemon.py [options]
-# events=TICK_60
 
 """
 uptimemon.py [-p processname=uptime_seconds]  [-g groupname=uptime_seconds]
 
+An event listener meant to be subscribed to TICK_60 (or TICK_5)
+events, which restarts any processes that are children of
+supervisord that run longer than specified.
+
+A supervisor config snippet that tells supervisor to use this script
+as a listener is below.
+
+[eventlistener:uptimemon]
+command=python uptimemon.py [options]
+events=TICK_60
+
 Options:
 
--p -- specify a process_name=byte_size pair.  Restart the supervisor
-      process named 'process_name' when it runs longer than uptime_seconds
-      seconds.  If this process is in a group, it can be specified using
-      the 'process_name:group_name' syntax.
+-p -- specify a process_name=uptime_seconds pair.  Restart the supervisor
+      process named 'process_name' when it runs longer than uptime_seconds.
+      If this process is in a group, it can be specified using the
+      'process_name:group_name' syntax.
 
--g -- specify a group_name=byte_size pair.  Restart any process in this group
-      when it runs longer than uptime_seconds seconds.
+-g -- specify a group_name=uptime_seconds pair.  Restart any process in this
+      group when it runs longer than uptime_seconds.
 
 The -p and -g options may be specified more than once, allowing for
 specification of multiple groups and processes.
@@ -80,6 +80,7 @@ class Uptimemon:
         # instead of sys.* so we can unit test this code
         headers, payload = childutils.listener.wait(self.stdin, self.stdout)
 
+        logging.info('headers: %s, payload: %s', headers, payload)
         if headers['eventname'].startswith('TICK'):
             self.react_to_tick()
 
@@ -89,15 +90,17 @@ class Uptimemon:
         infos = self.rpc.supervisor.getAllProcessInfo()
 
         for info in infos:
-            self.check_process_info(info)
+            self.check_process_info(**info)
 
         self.stderr.flush()
 
-    def check_process_info(self, info):
-        name = info['name']
-        group = info['group']
-        uptime = info['now'] - info['start']
+    def check_process_info(self, name=None, group=None, now=None,
+            start=None, statename=None):
+        uptime = now - start
         full_name = '%s:%s' % (group, name)
+
+        if statename != 'RUNNING':
+            return
 
         max_uptime = (self.uptime_per_program.get(name)
                 or self.uptime_per_program.get(full_name)
