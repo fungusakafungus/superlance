@@ -50,6 +50,7 @@ uptimemon.py -p program1=600 -p thegroup:theprog=3600 -g thegroup=3600
 import os
 import sys
 import xmlrpclib
+import logging
 
 from supervisor import childutils
 
@@ -61,6 +62,7 @@ def usage():
 
 
 class Uptimemon:
+
     def __init__(self, uptime_per_program, uptime_per_group, rpc):
         self.uptime_per_program = uptime_per_program
         self.uptime_per_group = uptime_per_group
@@ -78,18 +80,18 @@ class Uptimemon:
         # instead of sys.* so we can unit test this code
         headers, payload = childutils.listener.wait(self.stdin, self.stdout)
 
-        if not headers['eventname'].startswith('TICK'):
-            # do nothing with non-TICK events
-            childutils.listener.ok(self.stdout)
-            return
+        if headers['eventname'].startswith('TICK'):
+            self.react_to_tick()
 
+        childutils.listener.ok(self.stdout)
+
+    def react_to_tick(self):
         infos = self.rpc.supervisor.getAllProcessInfo()
 
         for info in infos:
             self.check_process_info(info)
 
         self.stderr.flush()
-        childutils.listener.ok(self.stdout)
 
     def check_process_info(self, info):
         name = info['name']
@@ -136,7 +138,6 @@ def parse_option(option, value):
 
 def main():
     import getopt
-    import logging
 
     short_args = "hp:g:"
     long_args = [
@@ -167,7 +168,9 @@ def main():
             name, uptime = parse_option(option, value)
             uptime_per_group[name] = uptime
 
-    logging.basicSetup(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
+    logging.basicSetup(
+            level=logging.INFO,
+            format='%(asctime)s %(levelname)s %(message)s')
     rpc = childutils.getRPCInterface(os.environ)
     uptimemon = Uptimemon(uptime_per_program, uptime_per_group, rpc)
     uptimemon.roundhouse_forever()

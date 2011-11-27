@@ -51,6 +51,7 @@ setup(name='superlance',
       crashmailbatch = superlance.crashmailbatch:main
       fatalmailbatch = superlance.fatalmailbatch:main
       memmon = superlance.memmon:main
+      uptimemon = superlance.uptimemon:main
       """
       )
 
