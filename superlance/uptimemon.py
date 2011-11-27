@@ -26,25 +26,25 @@
 # command=python uptimemon.py [options]
 # events=TICK_60
 
-"""\
-uptimemon.py [-p processname=byte_size]  [-g groupname=byte_size] 
+"""
+uptimemon.py [-p processname=uptime_seconds]  [-g groupname=uptime_seconds]
 
 Options:
 
 -p -- specify a process_name=byte_size pair.  Restart the supervisor
-      process named 'process_name' when it uses more than byte_size
-      RSS.  If this process is in a group, it can be specified using
+      process named 'process_name' when it runs longer than uptime_seconds
+      seconds.  If this process is in a group, it can be specified using
       the 'process_name:group_name' syntax.
 
 -g -- specify a group_name=byte_size pair.  Restart any process in this group
-      when it uses more than byte_size RSS.
+      when it runs longer than uptime_seconds seconds.
 
 The -p and -g options may be specified more than once, allowing for
 specification of multiple groups and processes.
 
 A sample invocation:
 
-uptimemon.py -p program1=200MB -p theprog:thegroup=100MB -g thegroup=100MB
+uptimemon.py -p program1=600 -p thegroup:theprog=3600 -g thegroup=3600
 """
 
 import os
@@ -52,91 +52,94 @@ import sys
 import xmlrpclib
 
 from supervisor import childutils
-from supervisor.datatypes import byte_size
+
 
 def usage():
     import posix
     print __doc__
     sys.exit(posix.EX_USAGE)
 
+
 class Uptimemon:
-    def __init__(self, programs, groups, rpc):
-        self.programs = programs
-        self.groups = groups
+    def __init__(self, uptime_per_program, uptime_per_group, rpc):
+        self.uptime_per_program = uptime_per_program
+        self.uptime_per_group = uptime_per_group
         self.rpc = rpc
         self.stdin = sys.stdin
         self.stdout = sys.stdout
         self.stderr = sys.stderr
 
-    def runforever(self, test=False):
+    def roundhouse_forever(self):
         while 1:
-            # we explicitly use self.stdin, self.stdout, and self.stderr
-            # instead of sys.* so we can unit test this code
-            headers, payload = childutils.listener.wait(self.stdin, self.stdout)
+            self.roundhouse_once()
 
-            if not headers['eventname'].startswith('TICK'):
-                # do nothing with non-TICK events
-                childutils.listener.ok(self.stdout)
-                if test:
-                    break
-                continue
+    def roundhouse_once(self):
+        # we explicitly use self.stdin, self.stdout, and self.stderr
+        # instead of sys.* so we can unit test this code
+        headers, payload = childutils.listener.wait(self.stdin, self.stdout)
 
-            infos = self.rpc.supervisor.getAllProcessInfo()
-
-            for info in infos:
-                name = info['name']
-                group = info['group']
-                pname = '%s:%s' % (group, name)
-
-                for n in name, pname:
-                    if n in self.programs:
-                        self.stderr.write('RSS of %s is %s\n' % (pname, rss))
-                        if  rss > self.programs[name]:
-                            self.restart(pname, rss)
-                            continue
-
-                if group in self.groups:
-                    self.stderr.write('RSS of %s is %s\n' % (pname, rss))
-                    if rss > self.groups[group]:
-                        self.restart(pname, rss)
-                        continue
-
-
-            self.stderr.flush()
+        if not headers['eventname'].startswith('TICK'):
+            # do nothing with non-TICK events
             childutils.listener.ok(self.stdout)
-            if test:
-                break
+            return
+
+        infos = self.rpc.supervisor.getAllProcessInfo()
+
+        for info in infos:
+            self.check_process_info(info)
+
+        self.stderr.flush()
+        childutils.listener.ok(self.stdout)
+
+    def check_process_info(self, info):
+        name = info['name']
+        group = info['group']
+        uptime = info['now'] - info['starttime']
+        full_name = '%s:%s' % (group, name)
+
+        max_uptime = (self.uptime_per_program.get(name)
+                or self.uptime_per_program.get(full_name)
+                or self.uptime_per_group.get(group))
+
+        if not max_uptime:
+            return
+
+        if uptime > max_uptime:
+            logging.info('Process %s is running since %i seconds, longer than '
+                    'allowed %i', name, uptime, max_uptime)
+            self.restart(name)
 
     def restart(self, name, rss):
-        self.stderr.write('Restarting %s\n' % name)
+        logging.info('Restarting %s', name)
 
         try:
             self.rpc.supervisor.stopProcess(name)
-        except xmlrpclib.Fault, what:
-            msg = ('Failed to stop process %s (RSS %s), exiting: %s' %
-                   (name, rss, what))
-            raise
+        except xmlrpclib.Fault, e:
+            logging.warning('Failed to stop process %s: %s', name, e)
 
         try:
             self.rpc.supervisor.startProcess(name)
-        except xmlrpclib.Fault, what:
-            msg = ('Failed to start process %s after stopping it, '
-                   'exiting: %s' % (name, what))
-            raise
+        except xmlrpclib.Fault, e:
+            logging.warning('Failed to start process %s after stopping it: %s',
+                    name, e)
 
-def parse_namesize(option, value):
+
+def parse_option(option, value):
     try:
-        name, size = value.split('=')
+        name, uptime = value.split('=')
+        uptime = long(uptime)
+        return name, uptime
     except ValueError:
         print 'Unparseable value %r for %r' % (value, option)
         usage()
-    size = parse_size(option, size)
-    return name, size
+
 
 def main():
     import getopt
-    short_args="hp:g:"
-    long_args=[
+    import logging
+
+    short_args = "hp:g:"
+    long_args = [
         "help",
         "program=",
         "group=",
@@ -145,33 +148,29 @@ def main():
     if not arguments:
         usage()
     try:
-        opts, args=getopt.getopt(arguments, short_args, long_args)
+        opts, args = getopt.getopt(arguments, short_args, long_args)
     except:
-        print __doc__
-        sys.exit(2)
+        usage()
 
-    programs = {}
-    groups = {}
+    uptime_per_program = {}
+    uptime_per_group = {}
 
     for option, value in opts:
-
         if option in ('-h', '--help'):
             usage()
 
         if option in ('-p', '--program'):
-            name, size = parse_namesize(option, value)
-            programs[name] = size
+            name, uptime = parse_option(option, value)
+            uptime_per_program[name] = uptime
 
         if option in ('-g', '--group'):
-            name, size = parse_namesize(option, value)
-            groups[name] = size
+            name, uptime = parse_option(option, value)
+            uptime_per_group[name] = uptime
 
+    logging.basicSetup(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     rpc = childutils.getRPCInterface(os.environ)
-    uptimemon = Uptimemon(programs, groups, rpc)
-    uptimemon.runforever()
+    uptimemon = Uptimemon(uptime_per_program, uptime_per_group, rpc)
+    uptimemon.roundhouse_forever()
 
 if __name__ == '__main__':
     main()
-    
-    
-    
